@@ -1,0 +1,24 @@
+﻿version: '3.8'
+
+services:
+  polypredictor-db:
+    image: mongo:6.0
+    container_name: polypredictor_db_container
+    ports:
+      - "27017:27017"
+    volumes:
+      - polypredictor_mongo_storage:/data/db
+
+  polypredictor-cache:
+    image: redis:7.0-alpine
+    container_name: polypredictor_cache_container
+    ports:
+      - "6379:6379"
+    volumes:
+      - polypredictor_redis_storage:/data
+
+volumes:
+  polypredictor_mongo_storage:
+    driver: local
+  polypredictor_redis_storage:
+    driver: local
