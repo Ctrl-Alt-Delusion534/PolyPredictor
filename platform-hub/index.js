@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 import dns from "dns";
 import userRouter from './routes/userRoutes.js';
+import marketRouter from './routes/marketRoutes.js';
+import betRoutes from "./routes/betRoutes.js";
 dns.setServers(["8.8.8.8", "8.8.4.4"]);
 dotenv.config({ path: "../.env" });
 const app = express();
@@ -10,6 +12,8 @@ const PORT = process.env.PORT_PLATFORM_HUB || 8000;
 const MONGO_URI = process.env.MONGODB_CONNECTION_URI;
 app.use(express.json());
 app.use("/api/users", userRouter);
+app.use("/api/markets", marketRouter);
+app.use("/api/bets", betRoutes);
 app.get("/", (req, res) => {
   res.status(200).json({
     message: "The server works fine.",
