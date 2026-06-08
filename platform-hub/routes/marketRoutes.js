@@ -1,12 +1,13 @@
 import express from "express";
 import {
-  createMarket,
-  getActiveMarkets,
+  createCustomMarket,
+  resolveMarket,
+  getMarkets,
 } from "../controllers/marketController.js";
 
 const router = express.Router();
-
-router.post("/create", createMarket);
-router.get("/active", getActiveMarkets);
+router.get("/", getMarkets);
+router.post("/create", createCustomMarket);
+router.post("/resolve", resolveMarket);
 
 export default router;

@@ -1,177 +1,233 @@
 import mongoose from "mongoose";
-import { MarketBet } from "../models/MarketBet.js";
 import { PredictiveMarket } from "../models/PredictiveMarket.js";
+import { MarketBet } from "../models/MarketBet.js";
 import { AccountUser } from "../models/AccountUser.js";
 
 export const placeBet = async (req, res) => {
+  const { marketId, userId, prediction, amountSpent } = req.body;
+
+  if (!marketId || !userId || !prediction || !amountSpent || amountSpent <= 0) {
+    return res
+      .status(400)
+      .json({ error: "Invalid input parameters for trade execution." });
+  }
+
+  const tradeAmount = parseFloat(amountSpent);
   const session = await mongoose.startSession();
-  session.startTransaction();
+  let useTransaction = true;
 
   try {
-    const { marketId, userId, prediction, amountSpent } = req.body;
-
-    if (!marketId || !userId || !prediction || !amountSpent) {
-      return res
-        .status(400)
-        .json({ error: "Missing required core transaction parameters." });
+    if (
+      mongoose.connection.baseUrl &&
+      (mongoose.connection.baseUrl.includes("127.0.0.1") ||
+        mongoose.connection.baseUrl?.includes("localhost"))
+    ) {
+      useTransaction = false;
     }
 
-    const tradeAmount = parseFloat(Number(amountSpent).toFixed(4));
-    if (tradeAmount <= 0 || isNaN(tradeAmount)) {
-      return res
-        .status(400)
-        .json({
-          error:
-            "Calateral investment amount must be a positive non-zero value.",
-        });
+    if (useTransaction) {
+      session.startTransaction();
     }
 
-    if (prediction !== "YES" && prediction !== "NO") {
-      return res
-        .status(400)
-        .json({ error: "Invalid market outcome prediction tokens." });
-    }
+    const marketObjId = new mongoose.Types.ObjectId(marketId);
+    const userObjId = new mongoose.Types.ObjectId(userId);
 
-    const user = await AccountUser.findById(userId).session(session);
-    if (!user) {
-      await session.abortTransaction();
-      return res.status(404).json({ error: "User account record not found." });
-    }
+    const market = useTransaction
+      ? await PredictiveMarket.findById(marketObjId).session(session)
+      : await PredictiveMarket.findById(marketObjId);
 
-    if (user.balance < tradeAmount) {
-      await session.abortTransaction();
-      return res
-        .status(400)
-        .json({
-          error: `Insufficient funds. Balance: ₹${user.balance.toFixed(2)}, Required: ₹${tradeAmount.toFixed(2)}`,
-        });
-    }
-
-    const market = await PredictiveMarket.findById(marketId).session(session);
     if (!market) {
-      await session.abortTransaction();
-      return res
-        .status(404)
-        .json({ error: "Target prediction market not found." });
-    }
-    if (market.status !== "OPEN") {
-      await session.abortTransaction();
-      return res
-        .status(400)
-        .json({ error: "Trading operations are closed for this market." });
+      if (useTransaction && session.inTransaction())
+        await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ error: "Market environment not found." });
     }
 
-    let bYes = market.yesShares || market.liquidity;
-    let bNo = market.noShares || market.liquidity;
-    const invariantK = bYes * bNo;
-    let sharesPurchased = 0;
+    if (market.status !== "OPEN") {
+      if (useTransaction && session.inTransaction())
+        await session.abortTransaction();
+      session.endSession();
+      return res
+        .status(400)
+        .json({ error: "Trading is closed or resolved for this market." });
+    }
+
+    // Defensive Layer: Ensure mathematical metrics never default to undefined or NaN
+    const bYes = parseFloat(market.yesShares) || 1000;
+    const bNo = parseFloat(market.noShares) || 1000;
+    const invariantK = parseFloat(market.invariantK) || bYes * bNo;
+
+    let sharesMinted = 0;
+    let newYesPool = bYes;
+    let newNoPool = bNo;
 
     if (prediction === "YES") {
-      const newNoPool = bNo + tradeAmount;
-      const newYesPool = invariantK / newNoPool;
-      sharesPurchased = bYes - newYesPool;
-      market.yesShares = newYesPool;
-      market.noShares = newNoPool;
+      newNoPool = bNo + tradeAmount;
+      newYesPool = invariantK / newNoPool;
+      sharesMinted = bYes - newYesPool;
+    } else if (prediction === "NO") {
+      newYesPool = bYes + tradeAmount;
+      newNoPool = invariantK / newYesPool;
+      sharesMinted = bNo - newNoPool;
     } else {
-      const newYesPool = bYes + tradeAmount;
-      const newNoPool = invariantK / newYesPool;
-      sharesPurchased = bNo - newNoPool;
-      market.yesShares = newYesPool;
-      market.noShares = newNoPool;
-    }
-
-    if (sharesPurchased <= 0 || isNaN(sharesPurchased)) {
-      await session.abortTransaction();
+      if (useTransaction && session.inTransaction())
+        await session.abortTransaction();
+      session.endSession();
       return res
         .status(400)
-        .json({
-          error:
-            "Slippage tolerance exceeded. Insufficient pool liquidity for order volume.",
-        });
+        .json({ error: "Invalid prediction side. Must be YES or NO." });
     }
 
-    const avgPricePaid = tradeAmount / sharesPurchased;
-    market.liquidity += tradeAmount;
+    if (
+      sharesMinted <= 0 ||
+      newYesPool <= 0 ||
+      newNoPool <= 0 ||
+      isNaN(sharesMinted)
+    ) {
+      if (useTransaction && session.inTransaction())
+        await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        error: "Transaction aborted due to critical liquidity pool exhaustion.",
+      });
+    }
 
-    await market.save({ session });
+    const averageSharePrice = parseFloat(
+      (tradeAmount / sharesMinted).toFixed(4),
+    );
 
     const walletUpdateResult = await AccountUser.findOneAndUpdate(
-      { _id: userId, balance: { $gte: tradeAmount } },
+      { _id: userObjId, balance: { $gte: tradeAmount } },
       { $inc: { balance: -tradeAmount } },
-      { session, new: true, runValidators: true },
+      {
+        ...(useTransaction ? { session } : {}),
+        new: true,
+        runValidators: true,
+      },
     );
 
     if (!walletUpdateResult) {
-      throw new Error(
-        "Wallet concurrency race condition detected. Transaction aborted to preserve asset integrity.",
-      );
+      if (useTransaction && session.inTransaction())
+        await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        error: "Inbound trade rejected due to insufficient account balance.",
+      });
     }
 
-    const [newBet] = await MarketBet.create(
+    const currentVolume = parseFloat(market.totalVolumeSpent) || 0;
+    market.totalVolumeSpent = currentVolume + tradeAmount;
+    market.yesShares = newYesPool;
+    market.noShares = newNoPool;
+    market.invariantK = invariantK;
+
+    const denominator = newYesPool + newNoPool;
+    const currentPriceYes = parseFloat((newNoPool / denominator).toFixed(4));
+    const currentPriceNo = parseFloat((newYesPool / denominator).toFixed(4));
+
+    // Defensive Layer: Ensure the target array is initialized before performing pushes
+    if (!market.priceHistory || !Array.isArray(market.priceHistory)) {
+      market.priceHistory = [];
+    }
+
+    market.priceHistory.push({
+      priceOfYes: currentPriceYes,
+      priceOfNo: currentPriceNo,
+      timestamp: new Date(),
+    });
+
+    if (useTransaction) {
+      await market.save({ session });
+    } else {
+      await market.save();
+    }
+
+    const createOptions = useTransaction ? { session } : {};
+    const [betReceipt] = await MarketBet.create(
       [
         {
-          marketId,
-          userId,
+          userId: userObjId,
+          marketId: marketObjId,
           side: prediction,
           amount: tradeAmount,
-          shares: sharesPurchased,
-          priceAtBet: avgPricePaid,
+          shares: sharesMinted,
+          priceAtBet: averageSharePrice,
         },
       ],
-      { session },
+      createOptions,
     );
 
-    await session.commitTransaction();
+    if (useTransaction) {
+      await session.commitTransaction();
+    }
     session.endSession();
 
-    return res.status(201).json({
+    return res.status(200).json({
       message:
         "Order executed successfully. Wallet debited via atomic AMM transaction.",
       executedOrder: {
-        sharesMinted: sharesPurchased.toFixed(4),
-        averageSharePrice: avgPricePaid.toFixed(4),
+        sharesMinted: sharesMinted.toFixed(4),
+        averageSharePrice: averageSharePrice.toFixed(4),
         updatedWalletBalance: walletUpdateResult.balance.toFixed(2),
         poolStatus: {
-          currentYesPoolShares: market.yesShares.toFixed(2),
-          currentNoPoolShares: market.noShares.toFixed(2),
-          totalLiquidityDepth: market.liquidity.toFixed(2),
+          currentYesPoolShares: newYesPool.toFixed(2),
+          currentNoPoolShares: newNoPool.toFixed(2),
+          totalLiquidityDepth: market.totalVolumeSpent.toFixed(2),
         },
-        receipt: newBet,
+        receipt: betReceipt,
       },
     });
   } catch (error) {
-    await session.abortTransaction();
+    try {
+      if (useTransaction && session.inTransaction()) {
+        await session.abortTransaction();
+      }
+    } catch (abortError) {}
     session.endSession();
+
     return res.status(500).json({
-      error:
-        "Critical failure within the AMM execution pipeline. Transaction rolled back safely.",
+      error: "Transaction processing pipeline failure.",
       context: error.message,
     });
   }
 };
 
 export const getUserPositions = async (req, res) => {
+  const { userId } = req.params;
+
+  if (!userId) {
+    return res
+      .status(400)
+      .json({ error: "Missing required userId parameter." });
+  }
+
   try {
-    const { userId } = req.params;
+    const userBets = await MarketBet.find({
+      userId: new mongoose.Types.ObjectId(userId),
+    });
+    const netPositions = {};
 
-    if (!userId) {
-      return res
-        .status(400)
-        .json({ error: "Missing required userId parameter in request path." });
-    }
+    userBets.forEach((bet) => {
+      const mId = bet.marketId.toString();
+      if (!netPositions[mId]) {
+        netPositions[mId] = { YES: 0, NO: 0 };
+      }
 
-    const positions = await MarketBet.find({ userId })
-      .populate("marketId", "title category status closeDate")
-      .sort({ createdAt: -1 });
+      if (bet.side === "YES") {
+        netPositions[mId].YES += bet.shares;
+      } else if (bet.side === "NO") {
+        netPositions[mId].NO += bet.shares;
+      }
+    });
 
     return res.status(200).json({
-      success: true,
-      count: positions.length,
-      positions,
+      message: "User open asset positions compiled successfully.",
+      userId,
+      positions: netPositions,
     });
   } catch (error) {
     return res.status(500).json({
-      error: "Internal server error while fetching user portfolio positions.",
+      error: "Failed to retrieve user portfolio positions.",
       context: error.message,
     });
   }

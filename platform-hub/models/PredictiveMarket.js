@@ -1,25 +1,32 @@
 import mongoose from "mongoose";
 
+const PriceSnapshotSchema = new mongoose.Schema({
+  priceOfYes: { type: Number, required: true },
+  priceOfNo: { type: Number, required: true },
+  timestamp: { type: Date, default: Date.now },
+});
+
 const predictiveMarketSchema = new mongoose.Schema(
   {
-    title: { type: String, required: true, trim: true },
-    description: { type: String, required: true },
-    category: { type: String, required: true, index: true },
+    title: { type: String, required: true },
+    description: { type: String },
+    category: { type: String, default: "General" },
     status: {
       type: String,
-      enum: ["OPEN", "CLOSED", "RESOLVED"],
+      enum: ["OPEN", "RESOLVED", "HALTED"],
       default: "OPEN",
-      index: true,
     },
-    liquidity: { type: Number, default: 100.0 }, 
-    yesShares: { type: Number, default: 0 },
-    noShares: { type: Number, default: 0 },
-    closeDate: { type: Date, required: true },
+    winningOutcome: { type: String, enum: ["YES", "NO", null], default: null },
+    yesShares: { type: Number, required: true },
+    noShares: { type: Number, required: true },
+    invariantK: { type: Number, required: true },
+    totalVolumeSpent: { type: Number, default: 0 },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "AccountUser",
-      required: true,
+      default: null,
     },
+    priceHistory: [PriceSnapshotSchema],
   },
   { timestamps: true },
 );

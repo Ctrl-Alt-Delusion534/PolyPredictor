@@ -1,6 +1,36 @@
 import { AccountUser } from "../models/AccountUser.js";
 import bcrypt from "bcrypt";
+export const loginUser = async (req, res) => {
+  const { email, password } = req.body;
 
+  if (!email || !password) {
+    return res.status(400).json({ error: "Missing required login fields." });
+  }
+
+  try {
+    const user = await AccountUser.findOne({ email });
+
+    if (!user || user.password !== password) {
+      return res
+        .status(401)
+        .json({ error: "Invalid email or matching password." });
+    }
+
+    return res.status(200).json({
+      message: "Authentication successful.",
+      user: {
+        id: user._id,
+        username: user.username,
+        balance: user.balance,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Login processing failure.",
+      context: error.message,
+    });
+  }
+};
 export const registerUser = async (req, res) => {
   try {
     const { username, email, password } = req.body;
@@ -16,11 +46,9 @@ export const registerUser = async (req, res) => {
     });
 
     if (existingUser) {
-      return res
-        .status(409)
-        .json({
-          error: "Conflict: Username or email identity already registered.",
-        });
+      return res.status(409).json({
+        error: "Conflict: Username or email identity already registered.",
+      });
     }
 
     const saltRounds = 10;
@@ -61,7 +89,7 @@ export const getUserProfile = async (req, res) => {
         .json({ error: "Target user profile resource not found." });
     }
 
-    return res.status(200).json({ user });
+    return res.status(200).json(user);
   } catch (error) {
     return res.status(500).json({
       error: "Internal server error during profile resource retrieval.",

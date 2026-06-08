@@ -3,23 +3,92 @@ import { PredictiveMarket } from "../models/PredictiveMarket.js";
 import { MarketBet } from "../models/MarketBet.js";
 import { AccountUser } from "../models/AccountUser.js";
 
+export const getMarkets = async (req, res) => {
+  try {
+    const markets = await PredictiveMarket.find({});
+    return res.status(200).json(markets);
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch market data feeds.",
+      context: error.message,
+    });
+  }
+};
+
+export const createCustomMarket = async (req, res) => {
+  const {
+    title,
+    description,
+    category,
+    initialPriceOfYes,
+    initialFunding,
+    userId,
+  } = req.body;
+
+  if (!title || !initialPriceOfYes || !initialFunding) {
+    return res
+      .status(400)
+      .json({ error: "Missing required market parameters." });
+  }
+
+  try {
+    const priceYes = parseFloat(initialPriceOfYes);
+    const priceNo = 1 - priceYes;
+
+    const totalShares = parseFloat(initialFunding);
+    const yesShares = totalShares * priceNo;
+    const noShares = totalShares * priceYes;
+    const invariantK = yesShares * noShares;
+
+    const newMarket = new PredictiveMarket({
+      title,
+      description,
+      category,
+      yesShares,
+      noShares,
+      invariantK,
+      totalVolumeSpent: totalShares,
+      createdBy: userId ? new mongoose.Types.ObjectId(userId) : null,
+      priceHistory: [
+        {
+          priceOfYes: priceYes,
+          priceOfNo: priceNo,
+          timestamp: new Date(),
+        },
+      ],
+    });
+
+    await newMarket.save();
+
+    return res.status(201).json({
+      message: "Custom friend-group market initialized successfully.",
+      market: newMarket,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to initialize custom market.",
+      context: error.message,
+    });
+  }
+};
+
 export const resolveMarket = async (req, res) => {
   const { marketId, outcome } = req.body;
 
   if (!marketId || (outcome !== "YES" && outcome !== "NO")) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "Invalid market identification or outcome resolution parameters.",
-      });
+    return res.status(400).json({
+      error: "Invalid market identification or outcome resolution parameters.",
+    });
   }
 
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const market = await PredictiveMarket.findById(marketId).session(session);
+    const marketObjId = new mongoose.Types.ObjectId(marketId);
+    const market =
+      await PredictiveMarket.findById(marketObjId).session(session);
+
     if (!market) {
       await session.abortTransaction();
       return res
@@ -29,19 +98,19 @@ export const resolveMarket = async (req, res) => {
 
     if (market.status !== "OPEN") {
       await session.abortTransaction();
-      return res
-        .status(400)
-        .json({
-          error:
-            "Conflict: This market environment has already been settled or halted.",
-        });
+      return res.status(400).json({
+        error:
+          "Conflict: This market environment has already been settled or halted.",
+      });
     }
 
     market.status = "RESOLVED";
     market.winningOutcome = outcome;
     await market.save({ session });
 
-    const rawPositions = await MarketBet.find({ marketId }).session(session);
+    const rawPositions = await MarketBet.find({
+      marketId: marketObjId,
+    }).session(session);
 
     const userNetPositions = {};
     rawPositions.forEach((bet) => {
@@ -59,21 +128,21 @@ export const resolveMarket = async (req, res) => {
 
     const payoutReceipts = [];
 
-    for (const [userId, positions] of Object.entries(userNetPositions)) {
+    for (const [userStrId, positions] of Object.entries(userNetPositions)) {
       const winningShares = outcome === "YES" ? positions.YES : positions.NO;
 
       if (winningShares > 0) {
         const payoutAmount = parseFloat((winningShares * 1.0).toFixed(4));
 
         const updatedUser = await AccountUser.findOneAndUpdate(
-          { _id: userId },
+          { _id: new mongoose.Types.ObjectId(userStrId) },
           { $inc: { balance: payoutAmount } },
           { session, new: true },
         );
 
         if (updatedUser) {
           payoutReceipts.push({
-            userId,
+            userId: userStrId,
             sharesSettled: winningShares.toFixed(4),
             payoutCredited: payoutAmount.toFixed(2),
             newBalance: updatedUser.balance.toFixed(2),
@@ -97,6 +166,7 @@ export const resolveMarket = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
+    console.error("MARKET RESOLUTION CRITICAL EXCEPTION:", error);
     return res.status(500).json({
       error:
         "Critical failure during the market settlement clearing process. Transaction safely aborted.",
