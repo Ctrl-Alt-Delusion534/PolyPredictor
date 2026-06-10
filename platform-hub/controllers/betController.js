@@ -52,7 +52,6 @@ export const placeBet = async (req, res) => {
         .json({ error: "Trading is closed or resolved for this market." });
     }
 
-    // Defensive Layer: Ensure mathematical metrics never default to undefined or NaN
     const bYes = parseFloat(market.yesShares) || 1000;
     const bNo = parseFloat(market.noShares) || 1000;
     const invariantK = parseFloat(market.invariantK) || bYes * bNo;
@@ -125,7 +124,6 @@ export const placeBet = async (req, res) => {
     const currentPriceYes = parseFloat((newNoPool / denominator).toFixed(4));
     const currentPriceNo = parseFloat((newYesPool / denominator).toFixed(4));
 
-    // Defensive Layer: Ensure the target array is initialized before performing pushes
     if (!market.priceHistory || !Array.isArray(market.priceHistory)) {
       market.priceHistory = [];
     }

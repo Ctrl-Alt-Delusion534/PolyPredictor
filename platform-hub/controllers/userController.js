@@ -1,98 +1,45 @@
 import { AccountUser } from "../models/AccountUser.js";
-import bcrypt from "bcrypt";
-export const loginUser = async (req, res) => {
-  const { email, password } = req.body;
+import { PredictiveMarket } from "../models/PredictiveMarket.js";
+import { MarketBet } from "../models/MarketBet.js";
 
-  if (!email || !password) {
-    return res.status(400).json({ error: "Missing required login fields." });
-  }
-
+export const getLeaderboard = async (req, res) => {
   try {
-    const user = await AccountUser.findOne({ email });
+    const users = await AccountUser.find({}).select("username balance");
+    const STARTING_BALANCE = 1000.0;
 
-    if (!user || user.password !== password) {
-      return res
-        .status(401)
-        .json({ error: "Invalid email or matching password." });
-    }
+    const rankings = await Promise.all(
+      users.map(async (user) => {
+        const profitGained = user.balance - STARTING_BALANCE;
 
-    return res.status(200).json({
-      message: "Authentication successful.",
-      user: {
-        id: user._id,
-        username: user.username,
-        balance: user.balance,
-      },
+        const wonBetsCount = await MarketBet.countDocuments({
+          userId: user._id,
+          side: { $ne: null },
+        });
+
+        return {
+          _id: user._id,
+          username: user.username,
+          balance: user.balance,
+          profitGained: parseFloat(profitGained.toFixed(2)),
+          successfulBets: wonBetsCount,
+        };
+      }),
+    );
+
+    rankings.sort((a, b) => {
+      if (b.profitGained === a.profitGained) {
+        if (b.balance === a.balance) {
+          return b.successfulBets - a.successfulBets;
+        }
+        return b.balance - a.balance;
+      }
+      return b.profitGained - a.profitGained;
     });
+
+    return res.status(200).json(rankings.slice(0, 10));
   } catch (error) {
     return res.status(500).json({
-      error: "Login processing failure.",
-      context: error.message,
-    });
-  }
-};
-export const registerUser = async (req, res) => {
-  try {
-    const { username, email, password } = req.body;
-
-    if (!username || !email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Missing required registration parameters." });
-    }
-
-    const existingUser = await AccountUser.findOne({
-      $or: [{ email: email.toLowerCase() }, { username }],
-    });
-
-    if (existingUser) {
-      return res.status(409).json({
-        error: "Conflict: Username or email identity already registered.",
-      });
-    }
-
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
-
-    const newUser = await AccountUser.create({
-      username,
-      email,
-      passwordHash,
-    });
-
-    return res.status(201).json({
-      message: "User registration and wallet initialization successful.",
-      user: {
-        id: newUser._id,
-        username: newUser.username,
-        email: newUser.email,
-        balance: newUser.balance,
-      },
-    });
-  } catch (error) {
-    return res.status(500).json({
-      error: "Internal server error during user registration pipeline.",
-      context: error.message,
-    });
-  }
-};
-
-export const getUserProfile = async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    const user = await AccountUser.findById(userId).select("-passwordHash");
-
-    if (!user) {
-      return res
-        .status(404)
-        .json({ error: "Target user profile resource not found." });
-    }
-
-    return res.status(200).json(user);
-  } catch (error) {
-    return res.status(500).json({
-      error: "Internal server error during profile resource retrieval.",
+      error: "Failed to compile clearing engine leaderboards.",
       context: error.message,
     });
   }

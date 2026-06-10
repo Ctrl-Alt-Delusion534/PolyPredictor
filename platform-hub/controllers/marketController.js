@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { PredictiveMarket } from "../models/PredictiveMarket.js";
 import { MarketBet } from "../models/MarketBet.js";
 import { AccountUser } from "../models/AccountUser.js";
+import { GoogleGenAI } from "@google/genai";
 
 export const getMarkets = async (req, res) => {
   try {
@@ -19,10 +20,11 @@ export const createCustomMarket = async (req, res) => {
   const {
     title,
     description,
-    category,
     initialPriceOfYes,
     initialFunding,
     userId,
+    visibility,
+    groupName,
   } = req.body;
 
   if (!title || !initialPriceOfYes || !initialFunding) {
@@ -32,6 +34,38 @@ export const createCustomMarket = async (req, res) => {
   }
 
   try {
+    let detectedCategory = "GENERAL";
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const aiResponse = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `Analyze this prediction market item and classify it into exactly one of these uppercase words: [TECH, FINANCE, GEOPOLITICS, SPORTS, ECONOMY, CRYPTO, GENERAL]. Return ONLY the single word. Question: "${title}"`,
+      });
+
+      const rawText = aiResponse.text ? aiResponse.text() : "";
+      const parsedText = rawText.trim().toUpperCase();
+
+      if (
+        parsedText &&
+        [
+          "TECH",
+          "FINANCE",
+          "GEOPOLITICS",
+          "SPORTS",
+          "ECONOMY",
+          "CRYPTO",
+          "GENERAL",
+        ].includes(parsedText)
+      ) {
+        detectedCategory = parsedText;
+      } else {
+        console.warn("⚠️ AI returned an unmapped category token:", parsedText);
+      }
+    } catch (aiError) {
+      console.error("❌ Gemini API Pipeline Exception:", aiError.message);
+    }
+
     const priceYes = parseFloat(initialPriceOfYes);
     const priceNo = 1 - priceYes;
 
@@ -43,12 +77,14 @@ export const createCustomMarket = async (req, res) => {
     const newMarket = new PredictiveMarket({
       title,
       description,
-      category,
+      category: detectedCategory,
       yesShares,
       noShares,
       invariantK,
       totalVolumeSpent: totalShares,
       createdBy: userId ? new mongoose.Types.ObjectId(userId) : null,
+      visibility: visibility || "PUBLIC",
+      groupName: visibility === "GROUP" ? groupName : "",
       priceHistory: [
         {
           priceOfYes: priceYes,
@@ -118,7 +154,6 @@ export const resolveMarket = async (req, res) => {
       if (!userNetPositions[uId]) {
         userNetPositions[uId] = { YES: 0, NO: 0 };
       }
-
       if (bet.side === "YES") {
         userNetPositions[uId].YES += bet.shares;
       } else if (bet.side === "NO") {

@@ -17,7 +17,17 @@ const marketBetSchema = new mongoose.Schema(
     side: { type: String, enum: ["YES", "NO"], required: true },
     amount: { type: Number, required: true },
     shares: { type: Number, required: true },
-    priceAtBet: { type: Number, required: true },
+    priceAtBet: { type: Number, required: true 
+    },
+    visibility: {
+      type: String,
+      enum: ["PUBLIC", "GROUP"],
+      default: "PUBLIC"
+    },
+    groupName:{
+      type: String,
+      default: ""
+    },
   },
   { timestamps: true },
 );

@@ -1,8 +1,8 @@
 import express from "express";
-import { getLeaderboard } from "../controllers/leaderboardController.js";
+import { getLeaderboard } from "../controllers/userController.js";
 
 const router = express.Router();
 
-router.get("/standings", getLeaderboard);
+router.get("/", getLeaderboard);
 
 export default router;
