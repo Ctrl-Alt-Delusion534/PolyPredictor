@@ -3,6 +3,7 @@ import { PredictiveMarket } from "../models/PredictiveMarket.js";
 import { MarketBet } from "../models/MarketBet.js";
 import { AccountUser } from "../models/AccountUser.js";
 import { GoogleGenAI } from "@google/genai";
+import dotenv from "dotenv";
 
 export const getMarkets = async (req, res) => {
   try {
@@ -40,30 +41,25 @@ export const createCustomMarket = async (req, res) => {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const aiResponse = await ai.models.generateContent({
         model: "gemini-2.5-flash",
-        contents: `Analyze this prediction market item and classify it into exactly one of these uppercase words: [TECH, FINANCE, GEOPOLITICS, SPORTS, ECONOMY, CRYPTO, GENERAL]. Return ONLY the single word. Question: "${title}"`,
+        contents: `Analyze this prediction market question: "${title}". Determine the single most relevant, high-level structural topic or industry sector it belongs to. Return ONLY that single word in absolute UPPERCASE with no punctuation, no quotes, no markdown, and no extra text. Examples: POLITICS, SCIENCE, MOVIES, AUTOMOTIVE, ACADEMICS.`,
       });
 
-      const rawText = aiResponse.text ? aiResponse.text() : "";
-      const parsedText = rawText.trim().toUpperCase();
+      console.log("Raw Gemini response:", JSON.stringify(aiResponse));
 
-      if (
-        parsedText &&
-        [
-          "TECH",
-          "FINANCE",
-          "GEOPOLITICS",
-          "SPORTS",
-          "ECONOMY",
-          "CRYPTO",
-          "GENERAL",
-        ].includes(parsedText)
-      ) {
-        detectedCategory = parsedText;
-      } else {
-        console.warn("⚠️ AI returned an unmapped category token:", parsedText);
+      const rawText = aiResponse.text;
+
+      if (rawText) {
+        const parsedText = rawText
+          .replace(/[^a-zA-Z]/g, "")
+          .trim()
+          .toUpperCase();
+
+        if (parsedText.length > 0) {
+          detectedCategory = parsedText;
+        }
       }
     } catch (aiError) {
-      console.error("❌ Gemini API Pipeline Exception:", aiError.message);
+      console.error("Gemini Classification Error:", aiError.message);
     }
 
     const priceYes = parseFloat(initialPriceOfYes);
@@ -97,12 +93,12 @@ export const createCustomMarket = async (req, res) => {
     await newMarket.save();
 
     return res.status(201).json({
-      message: "Custom friend-group market initialized successfully.",
+      message: "Dynamic category market contract initialized successfully.",
       market: newMarket,
     });
   } catch (error) {
     return res.status(500).json({
-      error: "Failed to initialize custom market.",
+      error: "Failed to initialize dynamically classified market.",
       context: error.message,
     });
   }

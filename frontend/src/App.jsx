@@ -233,11 +233,17 @@ export default function App() {
 
   const executeTradeOrder = async (e) => {
     e.preventDefault();
-    if (!amountSpent || parseFloat(amountSpent) <= 0 || !userId) return;
+    if (
+      !amountSpent ||
+      parseFloat(amountSpent) <= 0 ||
+      !userId ||
+      !selectedMarket
+    )
+      return;
     setTradeStatus({ loading: true, success: null, error: null });
 
     try {
-      const response = await apiRequest("/bets/place", "POST", {
+      const response = await apiRequest("/markets/bets/place", "POST", {
         marketId: selectedMarket._id,
         userId: userId,
         prediction: predictionSide,
@@ -249,18 +255,22 @@ export default function App() {
         success: "Order executed completely.",
         error: null,
       });
+
       const finalBalance =
-        response.executedOrder?.updatedWalletBalance ||
-        response.executedOrder ||
-        userBalance;
+        response.executedOrder?.updatedWalletBalance || userBalance;
       setUserBalance(parseFloat(finalBalance));
       fetchPlatformData();
+
       setTimeout(() => {
         setSelectedMarket(null);
         setTradeStatus({ loading: false, success: null, error: null });
       }, 1500);
     } catch (error) {
-      setTradeStatus({ loading: false, success: null, error: error.message });
+      setTradeStatus({
+        loading: false,
+        success: null,
+        error: error.message || "Transaction processing pipeline failure.",
+      });
     }
   };
 
@@ -293,12 +303,17 @@ export default function App() {
 
   const categories = [
     "ALL",
-    ...new Set(markets.map((m) => m.category || "GENERAL")),
+    ...new Set(
+      markets.map((m) => (m.category || "GENERAL").trim().toUpperCase()),
+    ),
   ];
   const filteredMarkets =
     activeCategory === "ALL"
       ? markets
-      : markets.filter((m) => (m.category || "GENERAL") === activeCategory);
+      : markets.filter(
+          (m) =>
+            (m.category || "GENERAL").trim().toUpperCase() === activeCategory,
+        );
 
   const getSortedLeaderboard = () => {
     return [...leaderboard].sort((a, b) => {
@@ -335,6 +350,143 @@ export default function App() {
     });
   };
 
+  const currentUserRecord =
+    leaderboard.find((user) => user._id === userId) || {};
+  const successfulBets = currentUserRecord.successfulBets || 0;
+  const totalProfit = parseFloat((userBalance - 1000).toFixed(2));
+  const roi = parseFloat(((userBalance - 1000) / 1000) * 100).toFixed(1);
+
+  const performanceScore = Math.round(
+    Math.max(
+      700,
+      Math.min(1450, 900 + Math.max(0, totalProfit) * 4 + successfulBets * 14),
+    ),
+  );
+
+  const levelInfo = (() => {
+    if (performanceScore < 940) {
+      return {
+        rank: "Novice",
+        label: "Rising Trader",
+        accent: "bg-[#334155] text-[#94a3b8]",
+      };
+    }
+    if (performanceScore < 1020) {
+      return {
+        rank: "Bronze",
+        label: "Momentum Builder",
+        accent: "bg-[#1f2937] text-[#c7d2fe]",
+      };
+    }
+    if (performanceScore < 1100) {
+      return {
+        rank: "Silver",
+        label: "Strategist",
+        accent: "bg-[#111827] text-[#93c5fd]",
+      };
+    }
+    if (performanceScore < 1180) {
+      return {
+        rank: "Gold",
+        label: "Alpha Operator",
+        accent: "bg-[#312e81] text-[#e9d5ff]",
+      };
+    }
+    if (performanceScore < 1260) {
+      return {
+        rank: "Platinum",
+        label: "Market Artisan",
+        accent: "bg-[#0f172a] text-[#a5b4fc]",
+      };
+    }
+    return {
+      rank: "Legend",
+      label: "Trade Maestro",
+      accent: "bg-[#0f172a] text-[#f9a8d4]",
+    };
+  })();
+
+  const trendSeed = Math.min(
+    1,
+    Math.max(
+      0.2,
+      0.45 + Math.max(0, totalProfit) / 800 + successfulBets * 0.02,
+    ),
+  );
+  const trendData = Array.from({ length: 7 }, (_, index) => {
+    const factor = 0.35 + index * 0.06;
+    return Math.min(1, Math.max(0.18, trendSeed * factor + index * 0.02));
+  });
+
+  const heatmapData = (() => {
+    const days = 14;
+    const wins = successfulBets;
+    const lossesEstimate = Math.max(0, Math.round(Math.abs(totalProfit) / 50));
+    const base = Array.from({ length: days }, () => ({ w: 0, l: 0 }));
+
+    for (let i = 0; i < wins; i++) {
+      const idx = Math.floor((i * 7) % days);
+      base[idx].w += 1;
+    }
+    for (let i = 0; i < lossesEstimate; i++) {
+      const idx = Math.floor((i * 5 + 3) % days);
+      base[idx].l += 1;
+    }
+    return base.map((d, i) => ({
+      day: i,
+      wins: d.w,
+      losses: d.l,
+    }));
+  })();
+
+  const profitText =
+    totalProfit === 0
+      ? "Break-even"
+      : totalProfit > 0
+        ? `+₹${totalProfit.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`
+        : `-₹${Math.abs(totalProfit).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+
+  const summaryItems = [
+    {
+      title: "Opening capital",
+      value: "₹1,000.00",
+      label: "Seed funding",
+    },
+    {
+      title: "Current equity",
+      value: `₹${userBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+      label: "Available balance",
+    },
+    {
+      title: "Net profit",
+      value: profitText,
+      label: "Since account creation",
+    },
+    {
+      title: "Win count",
+      value: successfulBets,
+      label: "Closed trades",
+    },
+  ];
+
+  const checkbookItems = [
+    {
+      description: "Initial deposit",
+      amount: "+₹1,000",
+      status: "Settled",
+    },
+    {
+      description: "Live equity update",
+      amount: `${userBalance >= 1000 ? "+" : ""}₹${(userBalance - 1000).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+      status: "Current",
+    },
+    {
+      description: "Success streak",
+      amount: `${successfulBets} wins`,
+      status: "Ongoing",
+    },
+  ];
+
   const VeraLogo = () => (
     <svg
       className="h-9 w-auto select-none overflow-visible"
@@ -366,6 +518,17 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#070b14] text-[#f3f4f6] font-sans antialiased tracking-normal selection:bg-[#079cff]/20 selection:text-[#079cff]">
+      <style>{`
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        input[type="number"] {
+          -moz-appearance: textfield;
+        }
+      `}</style>
+
       {(creationStatus.success || creationStatus.error) && (
         <div className="fixed top-6 right-6 z-[100] max-w-sm w-full bg-[#0e1629]/95 border border-[#1e2e4f] backdrop-blur-xl rounded-xl p-4 shadow-2xl flex items-start gap-3 animate-in fade-in slide-in-from-top-4 duration-300">
           <div className="mt-0.5 shrink-0">
@@ -424,7 +587,7 @@ export default function App() {
                     value={regUsername}
                     onChange={(e) => setRegUsername(e.target.value)}
                     placeholder="e.g., SahilSingh"
-                    className="block w-full bg-[#070b14] border border-[#1e2942] focus:border-[#079cff] rounded-lg px-3.5 py-2 text-white text-sm focus:outline-none placeholder-gray-600 transition-colors font-normal"
+                    className="block w-full bg-[#070b14] border border-[#1e2942] focus:border-[#079cff] rounded-xl px-3.5 py-2 text-white text-sm focus:outline-none placeholder-gray-600 transition-colors font-normal"
                   />
                 </div>
               )}
@@ -438,7 +601,7 @@ export default function App() {
                   value={regEmail}
                   onChange={(e) => setRegEmail(e.target.value)}
                   placeholder="name@domain.com"
-                  className="block w-full bg-[#070b14] border border-[#1e2942] focus:border-[#079cff] rounded-lg px-3.5 py-2 text-white text-sm focus:outline-none placeholder-gray-600 transition-colors font-normal"
+                  className="block w-full bg-[#070b14] border border-[#1e2942] focus:border-[#079cff] rounded-xl px-3.5 py-2 text-white text-sm focus:outline-none placeholder-gray-600 transition-colors font-normal"
                 />
               </div>
               <div>
@@ -451,7 +614,7 @@ export default function App() {
                   value={regPassword}
                   onChange={(e) => setRegPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="block w-full bg-[#070b14] border border-[#1e2942] focus:border-[#079cff] rounded-lg px-3.5 py-2 text-white text-sm focus:outline-none placeholder-gray-600 transition-colors font-normal"
+                  className="block w-full bg-[#070b14] border border-[#1e2942] focus:border-[#079cff] rounded-xl px-3.5 py-2 text-white text-sm focus:outline-none placeholder-gray-600 transition-colors font-normal"
                 />
               </div>
 
@@ -516,19 +679,19 @@ export default function App() {
               <div className="flex items-center space-x-0.5 bg-[#0e1424] border border-[#1e2942]/80 p-0.5 rounded-lg">
                 <button
                   onClick={() => setActiveTab("MARKETS")}
-                  className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all ${activeTab === "MARKETS" ? "bg-[#1e2942] text-white" : "text-gray-400 hover:text-white"}`}
+                  className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all ${activeTab === "MARKETS" ? "bg-[#1e2d54] text-white" : "text-gray-400 hover:text-white"}`}
                 >
                   Markets
                 </button>
                 <button
                   onClick={() => setActiveTab("CREATE")}
-                  className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all ${activeTab === "CREATE" ? "bg-[#1e2942] text-white" : "text-gray-400 hover:text-white"}`}
+                  className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all ${activeTab === "CREATE" ? "bg-[#1e2d54] text-white" : "text-gray-400 hover:text-white"}`}
                 >
                   Deploy Pool
                 </button>
                 <button
                   onClick={() => setActiveTab("LEADERBOARD")}
-                  className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all ${activeTab === "LEADERBOARD" ? "bg-[#1e2942] text-white" : "text-gray-400 hover:text-white"}`}
+                  className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all ${activeTab === "LEADERBOARD" ? "bg-[#1e2d54] text-white" : "text-gray-400 hover:text-white"}`}
                 >
                   Leaderboard
                 </button>
@@ -540,13 +703,11 @@ export default function App() {
                 <Wallet2 size={14} className="text-[#079cff]" />
                 <div className="flex flex-col">
                   <span className="text-[9px] text-gray-500 font-bold tracking-tight uppercase leading-none">
-                    Net Return PnL
+                    Available Balance
                   </span>
-                  <span
-                    className={`font-bold text-xs md:text-sm tracking-tight mt-0.5 ${userBalance - 1000 >= 0 ? "text-[#00b074]" : "text-[#ff0026]"}`}
-                  >
-                    {userBalance - 1000 >= 0 ? "+" : ""}₹
-                    {(userBalance - 1000).toLocaleString("en-IN", {
+                  <span className="font-bold text-xs md:text-sm tracking-tight mt-0.5 text-white">
+                    ₹
+                    {userBalance.toLocaleString("en-IN", {
                       minimumFractionDigits: 2,
                     })}
                   </span>
@@ -596,7 +757,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex flex-1 relative overflow-hidden px-6 md:px-16 py-6 gap-6">
+          <div className="flex flex-col lg:flex-row flex-1 relative overflow-hidden px-6 md:px-16 py-6 gap-6">
             <main
               className={`flex-1 transition-all duration-300 overflow-y-auto ${selectedMarket ? "pr-[380px]" : ""}`}
             >
@@ -648,7 +809,9 @@ export default function App() {
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center space-x-2 mb-1.5">
                                   <span className="text-[9px] uppercase font-bold tracking-tight text-[#079cff] bg-[#079cff]/10 border border-[#079cff]/20 px-1.5 py-0.5 rounded">
-                                    {market.category || "GENERAL"}
+                                    {(market.category || "GENERAL")
+                                      .trim()
+                                      .toUpperCase()}
                                   </span>
                                   <span className="text-xs text-gray-500 font-medium flex items-center gap-1 tracking-tight">
                                     {market.visibility === "GROUP" ? (
@@ -896,7 +1059,7 @@ export default function App() {
                       </h2>
                     </div>
                     <span className="text-[10px] text-gray-400 uppercase font-bold tracking-tight bg-[#070b14] border border-[#1e2942] px-2.5 py-1 rounded-md">
-                      Interactive Metric Index
+                      Achievers
                     </span>
                   </div>
 
@@ -1052,24 +1215,206 @@ export default function App() {
               )}
             </main>
 
-            <aside className="hidden lg:flex flex-col w-64 space-y-4 shrink-0 border-l border-[#1e2942]/40 pl-6">
-              <div className="bg-[#0e1424] border border-[#1e2942]/80 rounded-xl p-4 space-y-3">
-                <h3 className="text-xs font-bold text-gray-400 tracking-wider uppercase flex items-center gap-1.5">
-                  <Bookmark size={12} className="text-[#079cff]" /> Terminal
-                  Core
-                </h3>
-                <div className="text-xs text-gray-400 space-y-2.5 leading-relaxed font-normal tracking-tight">
-                  <p>
-                    Authenticated workspace context:{" "}
-                    <span className="text-white font-semibold">
-                      {username || "Trader"}
+            <aside className="flex flex-col w-full lg:w-80 space-y-4 shrink-0 border-t border-[#1e2942]/40 lg:border-t-0 lg:border-l pl-0 lg:pl-6 pt-6 lg:pt-0 font-sans">
+              <div className="bg-[#0c121f] border border-[#1d2b46]/70 rounded-3xl p-5 shadow-[0_28px_70px_rgba(0,0,0,0.18)]">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.24em] text-gray-400 font-bold">
+                      Performance Ledger
+                    </p>
+                    <h3 className="mt-3 text-white font-bold text-lg tracking-tight">
+                      Trading run overview
+                    </h3>
+                  </div>
+                  {levelInfo.rank === "Novice" ? (
+                    <div className="flex flex-col items-center justify-center gap-2 text-center">
+                      <div
+                        className="w-14 h-14 rounded-full flex items-center justify-center"
+                        style={{
+                          background: "linear-gradient(135deg,#ffd27a,#ff8a65)",
+                          boxShadow:
+                            "0 10px 30px rgba(255,138,101,0.22), inset 0 -6px 12px rgba(0,0,0,0.14)",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                        }}
+                      >
+                        <div className="text-white text-sm font-extrabold">
+                          N
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-sm font-extrabold text-white">
+                          Novice
+                        </div>
+                        <div className="text-[11px] text-gray-300">
+                          Rising Trader
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <span
+                      className={`px-3 py-1.5 rounded-full text-[10px] font-semibold uppercase tracking-[0.24em] ${levelInfo.accent}`}
+                    >
+                      {levelInfo.rank}
                     </span>
-                    .
-                  </p>
-                  <p>
-                    Your asset margin balances settle automatically using
-                    real-time constant product invariant mathematical functions.
-                  </p>
+                  )}
+                </div>
+
+                <div className="mt-5 grid gap-3">
+                  <div className="bg-[#061020] rounded-3xl border border-[#16203a]/70 p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.03)]">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.24em] text-gray-400 font-bold">
+                          Trader Rating
+                        </p>
+                        <p className="mt-2 text-3xl font-bold text-white">
+                          {performanceScore}
+                        </p>
+                      </div>
+                      <div
+                        className={`rounded-3xl px-4 py-2 text-[11px] font-bold uppercase tracking-[0.2em] ${levelInfo.accent}`}
+                      >
+                        {levelInfo.label}
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <div className="relative h-28 mb-3">
+                        <div className="absolute inset-0 flex items-end gap-2 px-1">
+                          {trendData.map((height, index) => {
+                            const pct = Math.round(height * 100);
+                            const isHigh = height > 0.75;
+                            const glow = isHigh
+                              ? "0 6px 18px rgba(0,176,116,0.28)"
+                              : "0 6px 18px rgba(7,156,255,0.16)";
+                            const bg = isHigh
+                              ? "linear-gradient(180deg,#00e092,#00b074)"
+                              : "linear-gradient(180deg,#60a5fa,#079cff)";
+                            return (
+                              <div
+                                key={index}
+                                className="flex-1 h-full flex items-end"
+                              >
+                                <div
+                                  title={`${pct}%`}
+                                  style={{
+                                    height: `${pct}%`,
+                                    background: bg,
+                                    boxShadow: glow,
+                                    borderRadius: "999px 999px 6px 6px",
+                                  }}
+                                  className="w-full"
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="absolute bottom-0 left-0 right-0 h-[1px] bg-[#0b1220]" />
+                      </div>
+                      <p className="mt-1 text-xs text-gray-400 tracking-tight">
+                        Live run graph for your profit and success trajectory.
+                      </p>
+
+                      <div className="mt-4">
+                        <p className="text-xs text-gray-500 uppercase tracking-[0.18em] font-bold mb-2">
+                          14-day heatmap
+                        </p>
+                        <div className="grid grid-cols-7 gap-2">
+                          {heatmapData.map((d, idx) => {
+                            const { wins, losses } = d;
+                            let bgColor = "rgba(9,11,16,0.18)";
+                            let textColor = "#94a3b8";
+                            if (wins > 0 && losses === 0) {
+                              const a = Math.min(0.95, 0.25 + wins * 0.18);
+                              bgColor = `rgba(0,186,116,${a})`;
+                              textColor = "#02140a";
+                            } else if (losses > 0 && wins === 0) {
+                              const a = Math.min(0.95, 0.2 + losses * 0.18);
+                              bgColor = `rgba(255,2,38,${a})`;
+                              textColor = "#2a0306";
+                            } else if (wins > 0 && losses > 0) {
+                              const a = Math.min(
+                                0.95,
+                                0.25 + (wins + losses) * 0.12,
+                              );
+                              bgColor = `rgba(147,51,234,${a})`;
+                              textColor = "#0f0711";
+                            }
+
+                            return (
+                              <div
+                                key={idx}
+                                className="rounded-2xl aspect-square flex items-center justify-center text-center text-[11px] font-semibold border border-[#1e2930]/25"
+                                style={{
+                                  background: bgColor,
+                                  color: textColor,
+                                }}
+                                title={`Day ${idx + 1}: ${wins} wins, ${losses} losses`}
+                              >
+                                {wins === 0 && losses === 0
+                                  ? "—"
+                                  : `${wins}w${losses ? ` / ${losses}l` : ""}`}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <p className="mt-2 text-[11px] text-gray-400">
+                          Green = wins only, Red = losses only, Purple = mixed
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {summaryItems.map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="bg-[#07101b] border border-[#1d2d4e]/60 rounded-3xl p-4 min-h-[128px] flex flex-col justify-between"
+                      >
+                        <div>
+                          <p className="text-[10px] uppercase tracking-[0.24em] text-gray-400 font-bold">
+                            {item.title}
+                          </p>
+                          <p className="mt-3 text-lg font-extrabold text-white">
+                            {item.value}
+                          </p>
+                        </div>
+                        <div className="mt-4 rounded-full bg-[#0f1725] border border-[#1b2640] py-2 px-3 text-center text-[11px] text-gray-400 font-semibold">
+                          {item.label}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="bg-[#070b14] rounded-3xl border border-[#1e292f]/70 p-4 font-sans">
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-xs uppercase tracking-[0.24em] text-gray-500 font-bold">
+                        Checkbook Summary
+                      </p>
+                      <span className="text-[10px] text-[#79c0ff] uppercase tracking-[0.24em] font-bold">
+                        Live
+                      </span>
+                    </div>
+                    <div className="space-y-3">
+                      {checkbookItems.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="bg-[#081123] border border-[#172241]/60 rounded-3xl px-3 py-3 flex flex-col items-center text-center gap-2"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold text-white">
+                              {item.description}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {item.status}
+                            </p>
+                          </div>
+                          <p className="text-sm font-bold text-white">
+                            {item.amount}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             </aside>
@@ -1136,6 +1481,69 @@ export default function App() {
                           />
                         </div>
                       </div>
+
+                      {tradeStatus.error && (
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "flex-start",
+                            gap: "12px",
+                            backgroundColor: "#FDF2F2",
+                            border: "1px solid #FBD5D5",
+                            borderRadius: "8px",
+                            padding: "12px 16px",
+                            animation: "fadeIn 0.2s ease-in-out",
+                          }}
+                        >
+                          <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 20 20"
+                            fill="none"
+                            style={{ marginTop: "2px", flexShrink: 0 }}
+                          >
+                            <path
+                              d="M10 18C14.4183 18 18 14.4183 18 10C18 5.58172 14.4183 2 10 2C5.58172 2 2 5.58172 2 10C2 14.4183 5.58172 18 10 18Z"
+                              fill="#F87171"
+                            />
+                            <path
+                              d="M10 6V11M10 14H10.01"
+                              stroke="#FFFFFF"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "2px",
+                            }}
+                          >
+                            <span
+                              style={{
+                                color: "#9B1C1C",
+                                fontSize: "14px",
+                                fontWeight: "600",
+                                lineHeight: "20px",
+                              }}
+                            >
+                              Trade Execution Blocked
+                            </span>
+                            <span
+                              style={{
+                                color: "#B91C1C",
+                                fontSize: "13px",
+                                fontWeight: "400",
+                                lineHeight: "18px",
+                              }}
+                            >
+                              {tradeStatus.error}
+                            </span>
+                          </div>
+                        </div>
+                      )}
 
                       {tradeStatus.success && (
                         <div className="flex items-start gap-2 bg-blue-500/10 border border-blue-500/20 p-2.5 rounded-lg text-[#079cff] text-xs font-medium">

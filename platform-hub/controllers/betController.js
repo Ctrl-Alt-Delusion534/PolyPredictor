@@ -5,53 +5,46 @@ import { AccountUser } from "../models/AccountUser.js";
 
 export const placeBet = async (req, res) => {
   const { marketId, userId, prediction, amountSpent } = req.body;
+  const tradeAmount = parseFloat(amountSpent);
 
-  if (!marketId || !userId || !prediction || !amountSpent || amountSpent <= 0) {
+  if (!marketId || !userId || !prediction || !tradeAmount || tradeAmount <= 0) {
     return res
       .status(400)
       .json({ error: "Invalid input parameters for trade execution." });
   }
 
-  const tradeAmount = parseFloat(amountSpent);
   const session = await mongoose.startSession();
-  let useTransaction = true;
+  session.startTransaction();
 
   try {
-    if (
-      mongoose.connection.baseUrl &&
-      (mongoose.connection.baseUrl.includes("127.0.0.1") ||
-        mongoose.connection.baseUrl?.includes("localhost"))
-    ) {
-      useTransaction = false;
-    }
-
-    if (useTransaction) {
-      session.startTransaction();
-    }
-
-    const marketObjId = new mongoose.Types.ObjectId(marketId);
-    const userObjId = new mongoose.Types.ObjectId(userId);
-
-    const market = useTransaction
-      ? await PredictiveMarket.findById(marketObjId).session(session)
-      : await PredictiveMarket.findById(marketObjId);
+    const market = await PredictiveMarket.findById(marketId).session(session);
+    const user = await AccountUser.findById(userId).session(session);
 
     if (!market) {
-      if (useTransaction && session.inTransaction())
-        await session.abortTransaction();
+      await session.abortTransaction();
       session.endSession();
       return res.status(404).json({ error: "Market environment not found." });
     }
 
     if (market.status !== "OPEN") {
-      if (useTransaction && session.inTransaction())
-        await session.abortTransaction();
+      await session.abortTransaction();
       session.endSession();
       return res
         .status(400)
         .json({ error: "Trading is closed or resolved for this market." });
     }
 
+const currentBalance = parseFloat(user?.balance) || 0;
+
+if (!user || currentBalance < tradeAmount) {
+  await session.abortTransaction();
+  session.endSession();
+  return res
+    .status(400)
+    .json({
+      error: "Inbound trade rejected due to insufficient account balance.",
+    });
+}
     const bYes = parseFloat(market.yesShares) || 1000;
     const bNo = parseFloat(market.noShares) || 1000;
     const invariantK = parseFloat(market.invariantK) || bYes * bNo;
@@ -69,8 +62,7 @@ export const placeBet = async (req, res) => {
       newNoPool = invariantK / newYesPool;
       sharesMinted = bNo - newNoPool;
     } else {
-      if (useTransaction && session.inTransaction())
-        await session.abortTransaction();
+      await session.abortTransaction();
       session.endSession();
       return res
         .status(400)
@@ -83,39 +75,24 @@ export const placeBet = async (req, res) => {
       newNoPool <= 0 ||
       isNaN(sharesMinted)
     ) {
-      if (useTransaction && session.inTransaction())
-        await session.abortTransaction();
+      await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({
-        error: "Transaction aborted due to critical liquidity pool exhaustion.",
-      });
+      return res
+        .status(400)
+        .json({
+          error:
+            "Transaction aborted due to critical liquidity pool exhaustion.",
+        });
     }
 
     const averageSharePrice = parseFloat(
       (tradeAmount / sharesMinted).toFixed(4),
     );
 
-    const walletUpdateResult = await AccountUser.findOneAndUpdate(
-      { _id: userObjId, balance: { $gte: tradeAmount } },
-      { $inc: { balance: -tradeAmount } },
-      {
-        ...(useTransaction ? { session } : {}),
-        new: true,
-        runValidators: true,
-      },
+    user.balance = parseFloat((user.balance - tradeAmount).toFixed(4));
+    market.totalVolumeSpent = parseFloat(
+      ((parseFloat(market.totalVolumeSpent) || 0) + tradeAmount).toFixed(4),
     );
-
-    if (!walletUpdateResult) {
-      if (useTransaction && session.inTransaction())
-        await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({
-        error: "Inbound trade rejected due to insufficient account balance.",
-      });
-    }
-
-    const currentVolume = parseFloat(market.totalVolumeSpent) || 0;
-    market.totalVolumeSpent = currentVolume + tradeAmount;
     market.yesShares = newYesPool;
     market.noShares = newNoPool;
     market.invariantK = invariantK;
@@ -134,30 +111,24 @@ export const placeBet = async (req, res) => {
       timestamp: new Date(),
     });
 
-    if (useTransaction) {
-      await market.save({ session });
-    } else {
-      await market.save();
-    }
+    await user.save({ session });
+    await market.save({ session });
 
-    const createOptions = useTransaction ? { session } : {};
     const [betReceipt] = await MarketBet.create(
       [
         {
-          userId: userObjId,
-          marketId: marketObjId,
+          userId: user._id,
+          marketId: market._id,
           side: prediction,
           amount: tradeAmount,
           shares: sharesMinted,
           priceAtBet: averageSharePrice,
         },
       ],
-      createOptions,
+      { session },
     );
 
-    if (useTransaction) {
-      await session.commitTransaction();
-    }
+    await session.commitTransaction();
     session.endSession();
 
     return res.status(200).json({
@@ -166,25 +137,22 @@ export const placeBet = async (req, res) => {
       executedOrder: {
         sharesMinted: sharesMinted.toFixed(4),
         averageSharePrice: averageSharePrice.toFixed(4),
-        updatedWalletBalance: walletUpdateResult.balance.toFixed(2),
+        updatedWalletBalance: user.balance.toFixed(4),
         poolStatus: {
-          currentYesPoolShares: newYesPool.toFixed(2),
-          currentNoPoolShares: newNoPool.toFixed(2),
-          totalLiquidityDepth: market.totalVolumeSpent.toFixed(2),
+          currentYesPoolShares: newYesPool.toFixed(4),
+          currentNoPoolShares: newNoPool.toFixed(4),
+          totalLiquidityDepth: market.totalVolumeSpent.toFixed(4),
         },
         receipt: betReceipt,
       },
     });
   } catch (error) {
-    try {
-      if (useTransaction && session.inTransaction()) {
-        await session.abortTransaction();
-      }
-    } catch (abortError) {}
+    await session.abortTransaction();
     session.endSession();
-
+    console.error("❌ AMM ENGINE TRADE TRANSACTION COLLISION:", error.message);
     return res.status(500).json({
-      error: "Transaction processing pipeline failure.",
+      error:
+        "Transaction processing pipeline failure due to concurrency lock competition.",
       context: error.message,
     });
   }
